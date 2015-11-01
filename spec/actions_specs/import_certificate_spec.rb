@@ -1,7 +1,6 @@
 describe Fastlane do
   describe Fastlane::FastFile do
     describe "Import certificate Integration" do
-
       it "works with certificate and password" do
         result = Fastlane::FastFile.new.parse("lane :test do
           import_certificate ({
@@ -11,12 +10,12 @@ describe Fastlane do
           })
         end").runner.execute(:test)
 
-        expect(result.size).to eq 98
         expect(result).to start_with 'security'
         expect(result).to include 'import test.cer'
         expect(result).to include '-k ~/Library/Keychains/test.keychain'
         expect(result).to include '-P testpassword'
         expect(result).to include '-T /usr/bin/codesign'
+        expect(result).to include '-T /usr/bin/security'
       end
 
       it "works with certificate and password that contain spaces or `\"`" do
@@ -28,13 +27,12 @@ describe Fastlane do
           })
         end").runner.execute(:test)
 
-        expect(result.size).to eq 120
         expect(result).to start_with 'security'
         expect(result).to include %(import \\\"\\ test\\ \\\".cer)
         expect(result).to include %(-k ~/Library/Keychains/\\\"\\ test\\ \\\".keychain)
         expect(result).to include %(-P \\\"test\\ password\\\")
         expect(result).to include '-T /usr/bin/codesign'
-
+        expect(result).to include '-T /usr/bin/security'
       end
 
       it "works with certificate" do
@@ -45,12 +43,12 @@ describe Fastlane do
           })
         end").runner.execute(:test)
 
-        expect(result.size).to eq 82
         expect(result).to start_with 'security'
         expect(result).to include 'import test.cer'
         expect(result).to include '-k ~/Library/Keychains/test.keychain'
         expect(result).to_not include '-P'
         expect(result).to include '-T /usr/bin/codesign'
+        expect(result).to include '-T /usr/bin/security'
       end
     end
   end

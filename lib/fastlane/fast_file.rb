@@ -1,6 +1,11 @@
 module Fastlane
   class FastFile
+    # Stores all relevant information from the currently running process
     attr_accessor :runner
+
+    # the platform in which we're currently in when parsing the Fastfile
+    # This is used to identify the platform in which the lane is in
+    attr_accessor :current_platform
 
     SharedValues = Fastlane::Actions::SharedValues
 
@@ -8,49 +13,101 @@ module Fastlane
     def initialize(path = nil)
       return unless (path || '').length > 0
       raise "Could not find Fastfile at path '#{path}'".red unless File.exist?(path)
-      @path = path
+      @path = File.expand_path(path)
       content = File.read(path)
 
-      parse(content)
+      # From https://github.com/orta/danger/blob/master/lib/danger/Dangerfile.rb
+      if content.tr!('“”‘’‛', %(""'''))
+        Helper.log.error "Your #{File.basename(path)} has had smart quotes sanitised. " \
+                    'To avoid issues in the future, you should not use ' \
+                    'TextEdit for editing it. If you are not using TextEdit, ' \
+                    'you should turn off smart quotes in your editor of choice.'.red
+      end
+
+      parse(content, @path)
     end
 
-    def parse(data)
-      @runner = Runner.new
+    def parsing_binding
+      binding
+    end
+
+    def parse(data, path = nil)
+      @runner ||= Runner.new
 
       Dir.chdir(Fastlane::FastlaneFolder.path || Dir.pwd) do # context: fastlane subfolder
-        eval(data) # this is okay in this case
+        # create nice path that we want to print in case of some problem
+        relative_path = path.nil? ? '(eval)' : Pathname.new(path).relative_path_from(Pathname.new(Dir.pwd)).to_s
+
+        begin
+          # We have to use #get_binding method, because some test files defines method called `path` (for example SwitcherFastfile)
+          # and local variable has higher priority, so it causes to remove content of original Fastfile for example. With #get_binding
+          # is this always clear and safe to declare any local variables we want, because the eval function uses the instance scope
+          # instead of local.
+
+          # rubocop:disable Lint/Eval
+          eval(data, parsing_binding, relative_path) # using eval is ok for this case
+          # rubocop:enable Lint/Eval
+        rescue SyntaxError => ex
+          line = ex.to_s.match(/#{Regexp.escape(relative_path)}:(\d+)/)[1]
+          raise "Syntax error in your Fastfile on line #{line}: #{ex}".red
+        end
       end
 
       self
     end
 
-
     #####################################################
     # @!group DSL
     #####################################################
 
-
     # User defines a new lane
     def lane(lane_name, &block)
       raise "You have to pass a block using 'do' for lane '#{lane_name}'. Make sure you read the docs on GitHub.".red unless block
-      
-      desc = desc_collection.join("\n\n")
-      platform = @current_platform
 
-      @runner.set_block(lane_name, platform, block, desc)
+      self.runner.add_lane(Lane.new(platform: self.current_platform,
+                                       block: block,
+                                 description: desc_collection,
+                                        name: lane_name,
+                                  is_private: false))
 
       @desc_collection = nil # reset the collected description again for the next lane
     end
-    
+
+    # User defines a new private lane, which can't be called from the CLI
+    def private_lane(lane_name, &block)
+      raise "You have to pass a block using 'do' for lane '#{lane_name}'. Make sure you read the docs on GitHub.".red unless block
+
+      self.runner.add_lane(Lane.new(platform: self.current_platform,
+                                       block: block,
+                                 description: desc_collection,
+                                        name: lane_name,
+                                  is_private: true))
+
+      @desc_collection = nil # reset the collected description again for the next lane
+    end
+
+    # User defines a lane that can overwrite existing lanes. Useful when importing a Fastfile
+    def override_lane(lane_name, &block)
+      raise "You have to pass a block using 'do' for lane '#{lane_name}'. Make sure you read the docs on GitHub.".red unless block
+
+      self.runner.add_lane(Lane.new(platform: self.current_platform,
+                                       block: block,
+                                 description: desc_collection,
+                                        name: lane_name,
+                                  is_private: false), true)
+
+      @desc_collection = nil # reset the collected description again for the next lane
+    end
+
     # User defines a platform block
     def platform(platform_name, &block)
-      SupportedPlatforms.verify!platform_name
+      SupportedPlatforms.verify! platform_name
 
-      @current_platform = platform_name
+      self.current_platform = platform_name
 
       block.call
 
-      @current_platform = nil
+      self.current_platform = nil
     end
 
     # Is executed before each test run
@@ -70,79 +127,45 @@ module Fastlane
 
     # Is used to look if the method is implemented as an action
     def method_missing(method_sym, *arguments, &_block)
-      # First, check if there is a predefined method in the actions folder
+      method_str = method_sym.to_s
+      method_str.delete!('?') # as a `?` could be at the end of the method name
 
-      class_name = method_sym.to_s.fastlane_class + 'Action'
+      # First, check if there is a predefined method in the actions folder
+      class_name = method_str.fastlane_class + 'Action'
       class_ref = nil
       begin
         class_ref = Fastlane::Actions.const_get(class_name)
-      rescue NameError => ex
+      rescue NameError
         # Action not found
-        raise "Could not find method '#{method_sym}'. Check out the README for more details: https://github.com/KrauseFx/fastlane".red
+        # Is there a lane under this name?
+        return self.runner.try_switch_to_lane(method_sym, arguments)
       end
 
+      # It's important to *not* have this code inside the rescue block
+      # otherwise all NameErrors will be catched and the error message is
+      # confusing
       if class_ref && class_ref.respond_to?(:run)
-        collector.did_launch_action(method_sym)
-
-        step_name = class_ref.step_text rescue nil
-        step_name = method_sym.to_s unless step_name
-
-        verify_supported_os(method_sym, class_ref)
-
-        Helper.log_alert("Step: " + step_name)
-
-        begin
-          Dir.chdir('..') do # go up from the fastlane folder, to the project folder
-            Actions.execute_action(method_sym) do
-              # arguments is an array by default, containing an hash with the actual parameters
-              # Since we usually just need the passed hash, we'll just use the first object if there is only one
-              if arguments.count == 0 
-                arguments = ConfigurationHelper.parse(class_ref, {}) # no parameters => empty hsh
-              elsif arguments.count == 1 and arguments.first.kind_of?Hash
-                arguments = ConfigurationHelper.parse(class_ref, arguments.first) # Correct configuration passed
-              elsif not class_ref.available_options
-                # This action does not use the new action format
-                # Just passing the arguments to this method
-              else
-                Helper.log.fatal "------------------------------------------------------------------------------------".red
-                Helper.log.fatal "If you've been an existing fastlane user, please check out the MigrationGuide to 1.0".yellow
-                Helper.log.fatal "https://github.com/KrauseFx/fastlane/blob/master/docs/MigrationGuide.md".yellow
-                Helper.log.fatal "------------------------------------------------------------------------------------".red
-                raise "You have to pass the options for '#{method_sym}' in a different way. Please check out the current documentation on GitHub!".red
-              end
-
-              class_ref.run(arguments)
-            end
-          end
-        rescue => ex
-          collector.did_raise_error(method_sym)
-          raise ex
-        end
+        # Action is available, now execute it
+        return self.runner.execute_action(method_sym, class_ref, arguments)
       else
         raise "Action '#{method_sym}' of class '#{class_name}' was found, but has no `run` method.".red
       end
     end
 
-
     #####################################################
     # @!group Other things
     #####################################################
 
-    # Speak out loud
-    def say(value)
-      # Overwrite this, since there is already a 'say' method defined in the Ruby standard library
-      value ||= yield
-      Actions.execute_action('say') do
-        Fastlane::Actions::SayAction.run([value])
-      end
+    def collector
+      runner.collector
     end
 
     # Is the given key a platform block or a lane?
     def is_platform_block?(key)
       raise 'No key given'.red unless key
 
-      return false if (self.runner.blocks[nil][key.to_sym] rescue false)
-      return true if self.runner.blocks[key.to_sym].kind_of?Hash
+      return false if self.runner.lanes.fetch(nil, {}).fetch(key.to_sym, nil)
+      return true if self.runner.lanes[key.to_sym].kind_of? Hash
 
       raise "Could not find '#{key}'. Available lanes: #{self.runner.available_lanes.join(', ')}".red
     end
@@ -160,34 +183,96 @@ module Fastlane
       end
     end
 
-    def verify_supported_os(name, class_ref)
-      if class_ref.respond_to?(:is_supported?)
-        if Actions.lane_context[Actions::SharedValues::PLATFORM_NAME]
-          # This value is filled in based on the executed platform block. Might be nil when lane is in root of Fastfile
-          platform = Actions.lane_context[Actions::SharedValues::PLATFORM_NAME]
-
-          unless class_ref.is_supported?(platform)
-            raise "Action '#{name}' doesn't support required operating system '#{platform}'.".red 
-          end
-        end
-      end
-    end
-
-    # Fastfile was finished executing
-    def did_finish
-      collector.did_finish
-    end
-
     def desc(string)
       desc_collection << string
     end
 
-    def collector
-      @collector ||= ActionCollector.new
-    end
-
     def desc_collection
       @desc_collection ||= []
+    end
+
+    def import(path = nil)
+      raise "Please pass a path to the `import` action".red unless path
+
+      path = path.dup.gsub("~", Dir.home)
+      unless Pathname.new(path).absolute? # unless an absolute path
+        path = File.join(File.expand_path('..', @path), path)
+      end
+
+      raise "Could not find Fastfile at path '#{path}'".red unless File.exist?(path)
+
+      collector.did_launch_action(:import)
+      parse(File.read(path), path)
+
+      # Check if we can also import local actions which are in the same directory as the Fastfile
+      actions_path = File.join(File.expand_path("..", path), 'actions')
+      Fastlane::Actions.load_external_actions(actions_path) if File.directory?(actions_path)
+    end
+
+    # @param url [String] The git URL to clone the repository from
+    # @param branch [String] The branch to checkout in the repository
+    # @param path [String] The path to the Fastfile
+    def import_from_git(url: nil, branch: 'HEAD', path: 'fastlane/Fastfile')
+      raise "Please pass a path to the `import_from_git` action".red if url.to_s.length == 0
+
+      Actions.execute_action('import_from_git') do
+        collector.did_launch_action(:import_from_git)
+
+        # Checkout the repo
+        repo_name = url.split("/").last
+
+        tmp_path = File.join("/tmp", "fl_clones_#{Time.now.to_i}")
+        clone_folder = File.join(tmp_path, repo_name)
+
+        branch_option = ""
+        branch_option = "--branch #{branch}" if branch != 'HEAD'
+
+        clone_command = "git clone '#{url}' '#{clone_folder}' --depth 1 -n #{branch_option}"
+
+        Helper.log.info "Cloning remote git repo..."
+        Actions.sh(clone_command)
+
+        Actions.sh("cd '#{clone_folder}' && git checkout #{branch} '#{path}'")
+
+        # We also want to check out all the local actions of this fastlane setup
+        containing = path.split(File::SEPARATOR)[0..-2]
+        containing = "." if containing.count == 0
+        actions_folder = File.join(containing, "actions")
+        begin
+          Actions.sh("cd '#{clone_folder}' && git checkout #{branch} '#{actions_folder}'")
+        rescue
+          # We don't care about a failure here, as local actions are optional
+        end
+
+        import(File.join(clone_folder, path))
+
+        if Dir.exist?(clone_folder)
+          # We want to re-clone if the folder already exists
+          Helper.log.info "Clearing the git repo..."
+          Actions.sh("rm -rf '#{tmp_path}'")
+        end
+      end
+    end
+
+    #####################################################
+    # @!group Overwriting Ruby methods
+    #####################################################
+
+    # Speak out loud
+    def say(value)
+      # Overwrite this, since there is already a 'say' method defined in the Ruby standard library
+      value ||= yield
+      Actions.execute_action('say') do
+        collector.did_launch_action(:say)
+        Fastlane::Actions::SayAction.run([value])
+      end
+    end
+
+    def puts(value)
+      # Overwrite this, since there is already a 'puts' method defined in the Ruby standard library
+      value ||= yield
+      collector.did_launch_action(:puts)
+      Fastlane::Actions::PutsAction.run([value])
     end
   end
 end

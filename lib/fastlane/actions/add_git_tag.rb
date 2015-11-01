@@ -3,16 +3,16 @@ module Fastlane
     # Adds a git tag to the current commit
     class AddGitTagAction < Action
       def self.run(options)
-        lane_name = Actions.lane_context[Actions::SharedValues::LANE_NAME].gsub(' ', '') # no spaces allowed
+        lane_name = Actions.lane_context[Actions::SharedValues::LANE_NAME].delete(' ') # no spaces allowed
 
-        tag = options[:tag] || "#{options[:grouping]}/#{lane_name}/#{options[:prefix]}#{options[:build_number].to_s}"
+        tag = options[:tag] || "#{options[:grouping]}/#{lane_name}/#{options[:prefix]}#{options[:build_number]}"
 
         Helper.log.info "Adding git tag '#{tag}' 🎯."
-        Actions.sh("git tag \"#{tag}\"")
+        Actions.sh("git tag -am '#{tag} (fastlane)' '#{tag}'")
       end
 
       def self.description
-        "This will add a git tag to the current branch"
+        "This will add an annotated git tag to the current branch"
       end
 
       def self.available_options

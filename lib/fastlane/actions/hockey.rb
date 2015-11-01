@@ -1,4 +1,4 @@
-# TODO: Workaround, since hockeyapp.rb from shenzhen includes the code for commander
+# Workaround, since hockeyapp.rb from shenzhen includes the code for commander
 def command(_param)
 end
 
@@ -28,7 +28,7 @@ module Fastlane
           end
         end
 
-        raise "Symbols on path '#{File.expand_path(dsym_filename)}' not found".red if (dsym_filename && !File.exist?(dsym_filename))
+        raise "Symbols on path '#{File.expand_path(dsym_filename)}' not found".red if dsym_filename && !File.exist?(dsym_filename)
 
         Helper.log.info 'Starting with ipa upload to HockeyApp... this could take some time.'.green
 
@@ -40,19 +40,22 @@ module Fastlane
 
         return values if Helper.test?
 
-        response = client.upload_build(options[:ipa], values)
+        ipa_filename = options[:ipa]
+        ipa_filename = nil if options[:upload_dsym_only]
+
+        response = client.upload_build(ipa_filename, values)
         case response.status
-          when 200...300
-            url = response.body['public_url']
+        when 200...300
+          url = response.body['public_url']
 
-            Actions.lane_context[SharedValues::HOCKEY_DOWNLOAD_LINK] = url
-            Actions.lane_context[SharedValues::HOCKEY_BUILD_INFORMATION] = response.body
+          Actions.lane_context[SharedValues::HOCKEY_DOWNLOAD_LINK] = url
+          Actions.lane_context[SharedValues::HOCKEY_BUILD_INFORMATION] = response.body
 
-            Helper.log.info "Public Download URL: #{url}" if url
-            Helper.log.info 'Build successfully uploaded to HockeyApp!'.green
-          else
-            raise "Error when trying to upload ipa to HockeyApp: #{response.body}".red
-          end
+          Helper.log.info "Public Download URL: #{url}" if url
+          Helper.log.info 'Build successfully uploaded to HockeyApp!'.green
+        else
+          raise "Error when trying to upload ipa to HockeyApp: #{response.body}".red
+        end
       end
 
       def self.description
@@ -64,22 +67,23 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :api_token,
                                        env_name: "FL_HOCKEY_API_TOKEN",
                                        description: "API Token for Hockey Access",
-                                       verify_block: Proc.new do |value|
-                                          raise "No API token for Hockey given, pass using `api_token: 'token'`".red unless (value and not value.empty?)
+                                       verify_block: proc do |value|
+                                         raise "No API token for Hockey given, pass using `api_token: 'token'`".red unless value and !value.empty?
                                        end),
           FastlaneCore::ConfigItem.new(key: :ipa,
                                        env_name: "FL_HOCKEY_IPA",
-                                       description: "Path to your IPA file. Optional if you use the `ipa` or `xcodebuild` action. For Mac zip the .app",
+                                       description: "Path to your IPA file. Optional if you use the `gym` or `xcodebuild` action. For Mac zip the .app",
                                        default_value: Actions.lane_context[SharedValues::IPA_OUTPUT_PATH],
-                                       verify_block: Proc.new do |value|
-                                        raise "Couldn't find ipa file at path '#{value}'".red unless File.exists?(value)
+                                       verify_block: proc do |value|
+                                         raise "Couldn't find ipa file at path '#{value}'".red unless File.exist?(value)
                                        end),
           FastlaneCore::ConfigItem.new(key: :dsym,
                                        env_name: "FL_HOCKEY_DSYM",
                                        description: "Path to your DSYM file",
+                                       default_value: Actions.lane_context[SharedValues::DSYM_OUTPUT_PATH],
                                        optional: true,
-                                       verify_block: Proc.new do |value|
-                                        # validation is done in the action
+                                       verify_block: proc do |value|
+                                         # validation is done in the action
                                        end),
           FastlaneCore::ConfigItem.new(key: :notes,
                                        env_name: "FL_HOCKEY_NOTES",
@@ -132,7 +136,12 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :build_server_url,
                                       env_name: "FL_HOCKEY_BUILD_SERVER_URL",
                                       description: "The URL of the build job on your build server",
-                                      optional: true)
+                                      optional: true),
+          FastlaneCore::ConfigItem.new(key: :upload_dsym_only,
+                                      env_name: "FL_HOCKEY_UPLOAD_DSYM_ONLY",
+                                      description: "Flag to upload only the dSYM file to hockey app",
+                                      is_string: false,
+                                      default_value: false)
         ]
       end
 
@@ -148,9 +157,8 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
     end
   end
 end
-

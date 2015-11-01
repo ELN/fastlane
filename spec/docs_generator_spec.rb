@@ -1,4 +1,4 @@
-require 'fastlane/docs_generator'
+require 'fastlane/documentation/docs_generator'
 
 describe Fastlane do
   describe Fastlane::DocsGenerator do
@@ -20,6 +20,7 @@ describe Fastlane do
       expect(output).to include('fastlane mac beta')
       expect(output).to include('https://fastlane.tools')
       expect(output).to include('https://github.com/')
+      expect(output).to include('fastlane docs')
     end
   end
 end

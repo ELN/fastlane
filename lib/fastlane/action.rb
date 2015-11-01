@@ -3,7 +3,6 @@ require 'fastlane/actions/actions_helper'
 module Fastlane
   class Action
     def self.run(params)
-      
     end
 
     # Implement in subclasses
@@ -33,6 +32,11 @@ module Fastlane
       nil
     end
 
+    def self.return_value
+      # Describes what this method returns
+      nil
+    end
+
     def self.author
       nil
     end
@@ -44,15 +48,19 @@ module Fastlane
     def self.is_supported?(platform)
       # you can do things like
       #  true
-      # 
+      #
       #  platform == :ios
-      # 
-      #  [:ios, :android].include?platform
-      # 
+      #
+      #  [:ios, :mac].include?(platform)
+      #
       raise "Implementing `is_supported?` for all actions is mandatory. Please update #{self}".red
     end
 
-
+    # Is printed out in the Steps: output in the terminal
+    # Return nil if you don't want any logging in the terminal/JUnit Report
+    def self.step_text
+      self.action_name
+    end
 
     # to allow a simple `sh` in the custom actions
     def self.sh(command)

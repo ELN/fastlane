@@ -2,16 +2,24 @@ require 'shellwords'
 
 module Fastlane
   module Actions
+    module SharedValues
+      ORIGINAL_DEFAULT_KEYCHAIN = :ORIGINAL_DEFAULT_KEYCHAIN
+    end
+
     class CreateKeychainAction < Action
       def self.run(params)
         escaped_name = params[:name].shellescape
         escaped_password = params[:password].shellescape
 
         commands = []
-        commands << Fastlane::Actions.sh("security create-keychain -p #{escaped_password} #{escaped_name}", log:false)
+        commands << Fastlane::Actions.sh("security create-keychain -p #{escaped_password} #{escaped_name}", log: false)
 
-        commands << Fastlane::Actions.sh("security default-keychain -s #{escaped_name}", log:false) if params[:default_keychain]
-        commands << Fastlane::Actions.sh("security unlock-keychain -p #{escaped_password} #{escaped_name}", log:false) if params[:unlock]
+        if params[:default_keychain]
+          Actions.lane_context[Actions::SharedValues::ORIGINAL_DEFAULT_KEYCHAIN] = Fastlane::Actions.sh("security default-keychain", log: false).strip
+          commands << Fastlane::Actions.sh("security default-keychain -s #{escaped_name}", log: false)
+        end
+
+        commands << Fastlane::Actions.sh("security unlock-keychain -p #{escaped_password} #{escaped_name}", log: false) if params[:unlock]
 
         command = "security set-keychain-settings"
         command << " -t #{params[:timeout]}" if params[:timeout]
@@ -19,7 +27,14 @@ module Fastlane
         command << " -u" if params[:lock_after_timeout]
         command << " ~/Library/Keychains/#{escaped_name}"
 
-        commands << Fastlane::Actions.sh(command, log:false)
+        commands << Fastlane::Actions.sh(command, log: false)
+
+        if params[:add_to_search_list]
+          keychains = Action.sh("security list-keychains -d user").shellsplit
+          keychains << File.expand_path(params[:name], "~/Library/Keychains")
+          commands << Fastlane::Actions.sh("security list-keychains -s #{keychains.shelljoin}", log: false)
+        end
+
         commands
       end
 
@@ -57,6 +72,10 @@ module Fastlane
                                        description: 'Lock keychain after timeout interval',
                                        is_string: false,
                                        default_value: false),
+          FastlaneCore::ConfigItem.new(key: :add_to_search_list,
+                                       description: 'Add keychain to search list',
+                                       is_string: false,
+                                       default_value: true)
         ]
       end
 

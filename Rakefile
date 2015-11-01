@@ -3,10 +3,12 @@ require 'rubocop/rake_task'
 
 Dir.glob('tasks/**/*.rake').each(&method(:import))
 
-desc 'Execute RuboCop static code analysis'
-RuboCop::RakeTask.new(:rubocop) do |t|
-  t.patterns = %w(bin lib)
-  t.fail_on_error = false
+task default: :spec
+
+task :test do
+  sh "../fastlane/bin/fastlane test"
 end
 
-task :default => :spec
+task :push do
+  sh "../fastlane/bin/fastlane release"
+end

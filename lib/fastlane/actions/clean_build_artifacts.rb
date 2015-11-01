@@ -2,19 +2,20 @@ module Fastlane
   module Actions
     class CleanBuildArtifactsAction < Action
       def self.run(options)
-        [
+        paths = [
           Actions.lane_context[Actions::SharedValues::IPA_OUTPUT_PATH],
-          Actions.lane_context[Actions::SharedValues::SIGH_PROFILE_PATH],
-          Actions.lane_context[Actions::SharedValues::DSYM_OUTPUT_PATH],
-        ].reject { |file| file.nil? || !File.exist?(file) }.each do |file| 
+          Actions.lane_context[Actions::SharedValues::DSYM_OUTPUT_PATH]
+        ]
 
+        paths += Actions.lane_context[Actions::SharedValues::SIGH_PROFILE_PATHS] || []
+
+        paths.reject { |file| file.nil? || !File.exist?(file) }.each do |file|
           if options[:exclude_pattern]
             next if file.match(options[:exclude_pattern])
           end
 
           Helper.log.debug "Cleaning up '#{file}'".yellow
-          File.delete(file) 
-          
+          File.delete(file)
         end
 
         Helper.log.info 'Cleaned up build artifacts 🐙'.green
@@ -24,7 +25,7 @@ module Fastlane
         [
           FastlaneCore::ConfigItem.new(key: :exclude_pattern,
                                        env_name: "FL_CLEAN_BUILD_ARTIFACTS_EXCLUDE_PATTERN",
-                                       description: "Exclude all files from clearing that match the given pattern: e.g. '.*\.mobileprovision'",
+                                       description: "Exclude all files from clearing that match the given Regex pattern: e.g. '.*\.mobileprovision'",
                                        default_value: nil,
                                        optional: true)
         ]
@@ -39,7 +40,7 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
     end
   end

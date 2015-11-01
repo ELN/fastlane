@@ -1,10 +1,7 @@
+# rubocop:disable Lint/AssignmentInCondition
+# rubocop:disable Style/Next
 module Fastlane
   module Actions
-    module SharedValues
-      IPA_OUTPUT_PATH = :IPA_OUTPUT_PATH
-      DSYM_OUTPUT_PATH = :DSYM_OUTPUT_PATH
-    end
-
     ARGS_MAP = {
       workspace: '-w',
       project: '-p',
@@ -28,9 +25,6 @@ module Fastlane
       end
 
       def self.run(params)
-        # The args we will build with
-        build_args = nil
-
         # The output directory of the IPA and dSYM
         absolute_dest_directory = nil
 
@@ -39,10 +33,11 @@ module Fastlane
           absolute_dest_directory = File.expand_path(dest)
         end
 
+        # The args we will build with
         # Maps nice developer build parameters to Shenzhen args
         build_args = params_to_build_args(params)
 
-        unless (params[:scheme] rescue nil)
+        unless params[:scheme]
           Helper.log.warn "You haven't specified a scheme. This might cause problems. If you can't see any output, please pass a `scheme`"
         end
 
@@ -74,17 +69,18 @@ module Fastlane
           Actions.lane_context[SharedValues::DSYM_OUTPUT_PATH] = absolute_dsym_path
           ENV[SharedValues::IPA_OUTPUT_PATH.to_s] = absolute_ipa_path # for deliver
           ENV[SharedValues::DSYM_OUTPUT_PATH.to_s] = absolute_dsym_path
+
+          Helper.log.info "You are using legacy `shenzhen` to build your app".yellow
+          Helper.log.info "It is recommended to upgrade to `gym`".yellow
+          Helper.log.info "https://github.com/fastlane/gym".yellow
         rescue => ex
           [
             "-------------------------------------------------------",
             "Original Error:",
             " => " + ex.to_s,
-            "A build error occured. This can have many reasons, usually",
-            "it has something to do with code signing. The `ipa` action",
-            "uses `shenzhen` under the hood: https://github.com/nomad/shenzhen",
-            "For code signing related issues, check out this guide:",
-            "https://github.com/KrauseFx/fastlane/blob/master/docs/CodeSigning.md",
-            "The command that was used by fastlane:",
+            "A build error occured. You are using legacy `shenzhen` for building",
+            "it is recommended to upgrade to `gym`: ",
+            "https://github.com/fastlane/gym",
             core_command,
             "-------------------------------------------------------"
           ].each do |txt|
@@ -105,7 +101,7 @@ module Fastlane
         # Maps nice developer param names to Shenzhen's `ipa build` arguments
         params.collect do |k, v|
           v ||= ''
-          if args = ARGS_MAP[k]
+          if ARGS_MAP[k]
             if k == :clean
               v == true ? '--clean' : '--no-clean'
             elsif k == :archive
@@ -200,7 +196,7 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :xcargs,
                                        env_name: "IPA_XCARGS",
                                        description: "Pass additional arguments to xcodebuild when building the app. Be sure to quote multiple args",
-                                       optional: true),
+                                       optional: true)
         ]
       end
 
@@ -217,3 +213,5 @@ module Fastlane
     end
   end
 end
+# rubocop:enable Lint/AssignmentInCondition
+# rubocop:enable Style/Next

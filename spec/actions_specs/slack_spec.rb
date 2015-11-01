@@ -12,11 +12,11 @@ describe Fastlane do
 
       it "raises an error if no slack URL is given" do
         ENV.delete 'SLACK_URL'
-        expect {
-          Fastlane::FastFile.new.parse("lane :test do 
+        expect do
+          Fastlane::FastFile.new.parse("lane :test do
             slack
           end").runner.execute(:test)
-        }.to raise_exception('No SLACK_URL given.'.red)
+        end.to raise_exception('No SLACK_URL given.'.red)
       end
 
       it "works so perfect, like Slack does" do
@@ -33,11 +33,10 @@ describe Fastlane do
           channel: channel,
           payload: {
             'Build Date' => Time.new.to_s,
-            'Built by' => 'Jenkins',
+            'Built by' => 'Jenkins'
           },
           default_payloads: [:lane, :test_result, :git_branch, :git_author]
         })
-
 
         notifier, attachments = Fastlane::Actions::SlackAction.run(arguments)
 
@@ -54,8 +53,45 @@ describe Fastlane do
         expect(fields[2][:title]).to eq('Lane')
         expect(fields[2][:value]).to eq(lane_name)
 
-        expect(fields[3][:title]).to eq('Test Result')
+        expect(fields[3][:title]).to eq('Result')
         expect(fields[3][:value]).to eq('Error')
+      end
+
+      it "merges attachment_properties when specified" do
+        channel = "#myChannel"
+        message = "Custom Message"
+        lane_name = "lane_name"
+
+        Fastlane::Actions.lane_context[Fastlane::Actions::SharedValues::LANE_NAME] = lane_name
+
+        require 'fastlane/actions/slack'
+        arguments = Fastlane::ConfigurationHelper.parse(Fastlane::Actions::SlackAction, {
+          message: message,
+          success: false,
+          channel: channel,
+          default_payloads: [:lane],
+          attachment_properties: {
+            thumb_url: 'http://example.com/path/to/thumb.png',
+            fields: [{
+              title: 'My Field',
+              value: 'My Value',
+              short: true
+            }]
+          }
+        })
+
+        notifier, attachments = Fastlane::Actions::SlackAction.run(arguments)
+
+        fields = attachments[:fields]
+
+        expect(fields[0][:title]).to eq('Lane')
+        expect(fields[0][:value]).to eq(lane_name)
+
+        expect(fields[1][:title]).to eq('My Field')
+        expect(fields[1][:value]).to eq('My Value')
+        expect(fields[1][:short]).to eq(true)
+
+        expect(attachments[:thumb_url]).to eq('http://example.com/path/to/thumb.png')
       end
     end
   end

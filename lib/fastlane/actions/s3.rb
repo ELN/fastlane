@@ -1,10 +1,11 @@
+# rubocop:disable Metrics/PerceivedComplexity
+# rubocop:disable Metrics/AbcSize
 require 'fastlane/erb_template_helper'
 require 'ostruct'
 require 'shenzhen'
 
 module Fastlane
   module Actions
-
     module SharedValues
       S3_IPA_OUTPUT_PATH = :S3_IPA_OUTPUT_PATH
       S3_DSYM_OUTPUT_PATH = :S3_DSYM_OUTPUT_PATH
@@ -22,12 +23,11 @@ module Fastlane
       region: '-r',
       acl: '--acl',
       source: '--source-dir',
-      path: '-P',
+      path: '-P'
     }
 
     class S3Action < Action
       def self.run(config)
-
         # Calling fetch on config so that default values will be used
         params = {}
         params[:ipa] = config[:ipa]
@@ -113,15 +113,19 @@ module Fastlane
         plist_url = "https://#{s3_subdomain}.amazonaws.com/#{s3_bucket}/#{plist_file_name}"
 
         html_file_name ||= "index.html"
-        html_url = "https://#{s3_subdomain}.amazonaws.com/#{s3_bucket}/#{html_file_name}"
 
         version_file_name ||= "version.json"
-        version_url = "https://#{s3_subdomain}.amazonaws.com/#{s3_bucket}/#{version_file_name}"
 
-        #grabs module
+        # grabs module
         eth = Fastlane::ErbTemplateHelper
+
         # Creates plist from template
-        plist_render = eth.render(eth.load("s3_plist_template"),{
+        if plist_template_path && File.exist?(plist_template_path)
+          plist_template = eth.load_from_path(plist_template_path)
+        else
+          plist_template = eth.load("s3_plist_template")
+        end
+        plist_render = eth.render(plist_template, {
           url: ipa_url,
           bundle_id: bundle_id,
           bundle_version: bundle_version,
@@ -129,16 +133,25 @@ module Fastlane
         })
 
         # Creates html from template
-        html_render = eth.render(eth.load("s3_html_template"),{
+        if html_template_path && File.exist?(html_template_path)
+          html_template = eth.load_from_path(html_template_path)
+        else
+          html_template = eth.load("s3_html_template")
+        end
+        html_render = eth.render(html_template, {
           url: plist_url,
           bundle_id: bundle_id,
           bundle_version: bundle_version,
           title: title
         })
 
-
         # Creates version from template
-        version_render = eth.render(eth.load("s3_version_template"),{
+        if version_template_path && File.exist?(version_template_path)
+          version_template = eth.load_from_path(version_template_path)
+        else
+          version_template = eth.load("s3_version_template")
+        end
+        version_render = eth.render(version_template, {
           url: plist_url,
           full_version: full_version
         })
@@ -159,10 +172,9 @@ module Fastlane
           html_render,
           version_file_name,
           version_render
-          )
+        )
 
         return true
-
       end
 
       def self.params_to_build_args(params)
@@ -170,9 +182,9 @@ module Fastlane
         params = params.delete_if { |k, v| (k != :clean && k != :archive ) && v.nil? }
 
         # Maps nice developer param names to Shenzhen's `ipa build` arguments
-        params.collect do |k,v|
+        params.collect do |k, v|
           v ||= ''
-          if args = S3_ARGS_MAP[k]
+          if S3_ARGS_MAP[k]
             value = (v.to_s.length > 0 ? "\"#{v}\"" : "")
             "#{S3_ARGS_MAP[k]} #{value}".strip
           end
@@ -180,10 +192,11 @@ module Fastlane
       end
 
       def self.upload_plist_and_html_to_s3(s3_access_key, s3_secret_access_key, s3_bucket, plist_file_name, plist_render, html_file_name, html_render, version_file_name, version_render)
+        Actions.verify_gem!('aws-sdk')
         require 'aws-sdk'
         s3_client = AWS::S3.new(
-            access_key_id: s3_access_key,
-            secret_access_key: s3_secret_access_key
+          access_key_id: s3_access_key,
+          secret_access_key: s3_secret_access_key
         )
         bucket = s3_client.buckets[s3_bucket]
 
@@ -201,7 +214,7 @@ module Fastlane
         Actions.lane_context[SharedValues::S3_VERSION_OUTPUT_PATH] = version_obj.public_url.to_s
         ENV[SharedValues::S3_VERSION_OUTPUT_PATH.to_s] = version_obj.public_url.to_s
 
-        Helper.log.info "Successfully uploaded ipa file to '#{html_obj.public_url.to_s}'".green
+        Helper.log.info "Successfully uploaded ipa file to '#{html_obj.public_url}'".green
       end
 
       #
@@ -236,7 +249,6 @@ module Fastlane
       def self.get_ipa_info(ipa_file)
         bundle_id, bundle_version, title, full_version = nil
         Dir.mktmpdir do |dir|
-
           system "unzip -q #{ipa_file} -d #{dir} 2> /dev/null"
           plist = Dir["#{dir}/**/*.app/Info.plist"].last
 
@@ -246,7 +258,6 @@ module Fastlane
 
           # This is the string: {CFBundleShortVersionString}.{CFBundleVersion}
           full_version = bundle_version + '.' + Shenzhen::PlistBuddy.print(plist, 'CFBundleVersion')
-
         end
         return bundle_id, bundle_version, title, full_version
       end
@@ -324,7 +335,7 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :acl,
                                        env_name: "S3_ACL",
                                        description: "Uploaded object permissions e.g public_read (default), private, public_read_write, authenticated_read ",
-                                       optional: true,),
+                                       optional: true)
         ]
       end
 
@@ -348,3 +359,5 @@ module Fastlane
     end
   end
 end
+# rubocop:enable Metrics/PerceivedComplexity
+# rubocop:enable Metrics/AbcSize

@@ -1,3 +1,4 @@
+# rubocop:disable all
 module Fastlane
   module Actions
     module SharedValues
@@ -43,7 +44,7 @@ module Fastlane
       }
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
 
       def self.run(params)
@@ -55,22 +56,29 @@ module Fastlane
         xcodebuild_args = Array[]
 
         # Supported ENV vars
-        build_path = ENV["XCODE_BUILD_PATH"] || nil
-        scheme     = ENV["XCODE_SCHEME"]
-        workspace  = ENV["XCODE_WORKSPACE"]
-        project    = ENV["XCODE_PROJECT"]
+        build_path    = ENV["XCODE_BUILD_PATH"] || nil
+        scheme        = ENV["XCODE_SCHEME"]
+        workspace     = ENV["XCODE_WORKSPACE"]
+        project       = ENV["XCODE_PROJECT"]
+        buildlog_path = ENV["XCODE_BUILDLOG_PATH"]
 
         # Append slash to build path, if needed
         if build_path && !build_path.end_with?("/")
           build_path += "/"
         end
 
+        # By default we use xcpretty
+        raw_buildlog = false
 
         if params
           # Operation bools
-          archiving = params.key? :archive
-          exporting = params.key? :export_archive
-          testing   = params.key? :test
+          archiving    = params.key? :archive
+          exporting    = params.key? :export_archive
+          testing      = params.key? :test
+
+          if params.key? :raw_buildlog
+            raw_buildlog = params[:raw_buildlog]
+          end
 
           if exporting
             # If not passed, retrieve path from previous xcodebuild call
@@ -80,7 +88,7 @@ module Fastlane
             params[:export_format] ||= "ipa"
 
             # If not passed, construct export path from env vars
-            if params[:export_path] == nil
+            if params[:export_path].nil?
               ipa_filename = scheme ? scheme : File.basename(params[:archive_path], ".*")
               params[:export_path] = "#{build_path}#{ipa_filename}"
             end
@@ -112,7 +120,12 @@ module Fastlane
           if hash_args = hash_to_args(params)
             xcodebuild_args += hash_args
           end
+
+          buildlog_path ||= params[:buildlog_path]
         end
+
+        # By default we put xcodebuild.log in the Logs folder
+        buildlog_path ||= File.expand_path("~/Library/Logs/fastlane/xcbuild/#{Time.now.strftime('%F')}/#{Process.pid}")
 
         # Joins args into space delimited string
         xcodebuild_args = xcodebuild_args.join(" ")
@@ -139,7 +152,6 @@ module Fastlane
           if params[:reports]
             # New report options format
             reports = params[:reports].reduce("") do |arguments, report|
-
               report_string = "--report #{report[:report]}"
 
               if report[:output]
@@ -169,7 +181,7 @@ module Fastlane
             # Test report file format
             report_formats = params[:report_formats].map do |format|
               "--report #{format}"
-            end.sort().join(" ")
+            end.sort.join(" ")
 
             xcpretty_args.push report_formats
 
@@ -191,14 +203,52 @@ module Fastlane
 
         # Stdout format
         if testing && !archiving
-          xcpretty_args.push "--test"
+          xcpretty_args << (params[:xcpretty_output] ? "--#{params[:xcpretty_output]}" : "--test")
         else
-          xcpretty_args.push "--simple"
+          xcpretty_args << (params[:xcpretty_output] ? "--#{params[:xcpretty_output]}" : "--simple")
         end
 
         xcpretty_args = xcpretty_args.join(" ")
 
-        Actions.sh "set -o pipefail && xcodebuild #{xcodebuild_args} | xcpretty #{xcpretty_args}"
+        xcpretty_command = ""
+        xcpretty_command = "| xcpretty #{xcpretty_args}" unless raw_buildlog
+
+        pipe_command = "| tee '#{buildlog_path}/xcodebuild.log' #{xcpretty_command}"
+
+        FileUtils.mkdir_p buildlog_path
+        Helper.log.info "For a more detailed xcodebuild log open #{buildlog_path}/xcodebuild.log"
+
+        output_result = ""
+
+        # In some cases the simulator is not booting up in time
+        # One way to solve it is to try to rerun it for one more time
+        begin
+          output_result = Actions.sh "set -o pipefail && xcodebuild #{xcodebuild_args} #{pipe_command}"
+        rescue => ex
+          exit_status = $?.exitstatus
+
+          raise_error = true
+          if exit_status.eql? 65
+            iphone_simulator_time_out_error = /iPhoneSimulator: Timed out waiting/
+
+            if (iphone_simulator_time_out_error =~ ex.message) != nil
+              raise_error = false
+
+              Helper.log.warn "First attempt failed with iPhone Simulator error: #{iphone_simulator_time_out_error.source}"
+              Helper.log.warn "Retrying once more..."
+              output_result = Actions.sh "set -o pipefail && xcodebuild #{xcodebuild_args} #{pipe_command}"
+            end
+          end
+
+          raise ex if raise_error
+        end
+
+        # If raw_buildlog and some reports had to be created, create xcpretty reports from the build log
+        if raw_buildlog && xcpretty_args.include?('--report')
+          output_result = Actions.sh "set -o pipefail && cat '#{buildlog_path}/xcodebuild.log' | xcpretty #{xcpretty_args} > /dev/null"
+        end
+
+        output_result
       end
 
       def self.hash_to_args(hash)
@@ -212,7 +262,7 @@ module Fastlane
             value = (v != true && v.to_s.length > 0 ? "\"#{v}\"" : "")
             "#{arg} #{value}".strip
           elsif k == :build_settings
-            v.map{|setting,value| "#{setting}=\"#{value}\""}.join(' ')
+            v.map {|setting, val| "#{setting}=\"#{val}\""}.join(' ')
           elsif k == :destination
             [*v].collect { |dst| "-destination \"#{dst}\"" }.join(' ')
           elsif k == :keychain && v.to_s.length > 0
@@ -230,7 +280,7 @@ module Fastlane
           Helper.log.warn "Multiple workspaces detected."
         end
 
-        if !workspaces.empty?
+        unless workspaces.empty?
           workspace = workspaces.first
           Helper.log.warn "Using workspace \"#{workspace}\""
         end
@@ -249,12 +299,15 @@ module Fastlane
           ['workspace', 'The workspace to use'],
           ['scheme', 'The scheme to build'],
           ['build_settings', 'Hash of additional build information'],
-          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII outout)']
+          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII output)'],
+          ['buildlog_path', 'The path where the xcodebuild.log will be created, by default it is created in ~/Library/Logs/fastlane/xcbuild'],
+          ['raw_buildlog', 'Set to true to see xcodebuild raw output. Default value is false'],
+          ['xcpretty_output', 'specifies the output type for xcpretty. eg. \'test\', or \'simple\'']
         ]
       end
 
       def self.details
-        "More infomration on GitHub: https://github.com/KrauseFx/fastlane/blob/master/docs/Actions.md#xcodebuild"
+        "More information on GitHub: https://github.com/KrauseFx/fastlane/blob/master/docs/Actions.md#xcodebuild"
       end
 
       def self.author
@@ -270,7 +323,7 @@ module Fastlane
       end
 
       def self.description
-        "Builds the project using `xcodebuild`"
+        "Archives the project using `xcodebuild`"
       end
 
       def self.author
@@ -278,7 +331,7 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
 
       def self.available_options
@@ -287,7 +340,10 @@ module Fastlane
           ['workspace', 'The workspace to use'],
           ['scheme', 'The scheme to build'],
           ['build_settings', 'Hash of additional build information'],
-          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII outout)']
+          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII output)'],
+          ['buildlog_path', 'The path where the xcodebuild.log will be created, by default it is created in ~/Library/Logs/fastlane/xcbuild'],
+          ['raw_buildlog', 'Set to true to see xcodebuild raw output. Default value is false'],
+          ['xcpretty_output', 'specifies the output type for xcpretty. eg. \'test\', or \'simple\'']
         ]
       end
     end
@@ -308,7 +364,7 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
 
       def self.available_options
@@ -318,7 +374,10 @@ module Fastlane
           ['workspace', 'The workspace to use'],
           ['scheme', 'The scheme to build'],
           ['build_settings', 'Hash of additional build information'],
-          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII outout)']
+          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII output)'],
+          ['buildlog_path', 'The path where the xcodebuild.log will be created, by default it is created in ~/Library/Logs/fastlane/xcbuild'],
+          ['raw_buildlog', 'Set to true to see xcodebuild raw output. Default value is false'],
+          ['xcpretty_output', 'specifies the output type for xcpretty. eg. \'test\', or \'simple\'']
         ]
       end
     end
@@ -331,7 +390,7 @@ module Fastlane
       end
 
       def self.description
-        "Builds the project using `xcodebuild`"
+        "Cleans the project using `xcodebuild`"
       end
 
       def self.author
@@ -339,7 +398,7 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
 
       def self.available_options
@@ -349,7 +408,10 @@ module Fastlane
           ['workspace', 'The workspace to use'],
           ['scheme', 'The scheme to build'],
           ['build_settings', 'Hash of additional build information'],
-          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII outout)']
+          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII output)'],
+          ['buildlog_path', 'The path where the xcodebuild.log will be created, by default it is created in ~/Library/Logs/fastlane/xcbuild'],
+          ['raw_buildlog', 'Set to true to see xcodebuild raw output. Default value is false'],
+          ['xcpretty_output', 'specifies the output type for xcpretty. eg. \'test\', or \'simple\'']
         ]
       end
     end
@@ -362,7 +424,7 @@ module Fastlane
       end
 
       def self.description
-        "Builds the project using `xcodebuild`"
+        "Exports the project using `xcodebuild`"
       end
 
       def self.author
@@ -376,18 +438,23 @@ module Fastlane
           ['workspace', 'The workspace to use'],
           ['scheme', 'The scheme to build'],
           ['build_settings', 'Hash of additional build information'],
-          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII outout)']
+          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII output)'],
+          ['buildlog_path', 'The path where the xcodebuild.log will be created, by default it is created in ~/Library/Logs/fastlane/xcbuild'],
+          ['raw_buildlog', 'Set to true to see xcodebuild raw output. Default value is false'],
+          ['xcpretty_output', 'specifies the output type for xcpretty. eg. \'test\', or \'simple\'']
         ]
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
     end
 
     class XctestAction < Action
       def self.run(params)
+        Helper.log.info "Have you seen the new 'scan' tool to run tests? https://github.com/fastlane/scan".yellow
         params_hash = params || {}
+        params_hash[:build] = true
         params_hash[:test] = true
         XcodebuildAction.run(params_hash)
       end
@@ -405,12 +472,15 @@ module Fastlane
           ['build_settings', 'Hash of additional build information'],
           ['destination', 'The simulator to use, e.g. "name=iPhone 5s,OS=8.1"'],
           ['destination_timeout', 'The timeout for connecting to the simulator, in seconds'],
-          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII outout)']
+          ['output_style', 'Set the output format to one of: :standard (Colored UTF8 output, default), :basic (black & white ASCII output)'],
+          ['buildlog_path', 'The path where the xcodebuild.log will be created, by default it is created in ~/Library/Logs/fastlane/xcbuild'],
+          ['raw_buildlog', 'Set to true to see xcodebuild raw output. Default value is false'],
+          ['xcpretty_output', 'specifies the output type for xcpretty. eg. \'test\', or \'simple\'']
         ]
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include?platform
+        [:ios, :mac].include? platform
       end
 
       def self.author
@@ -419,3 +489,4 @@ module Fastlane
     end
   end
 end
+# rubocop:enable all
